@@ -739,18 +739,9 @@ func verifyDaemonSettings(conf *config.Config) error {
 	if conf.ContainerdNamespace == conf.ContainerdPluginNamespace {
 		return errors.New("containers namespace and plugins namespace cannot be the same")
 	}
-	// Check for mutually incompatible config options
-	if conf.BridgeConfig.Iface != "" && conf.BridgeConfig.IP != "" {
-		return fmt.Errorf("You specified -b & --bip, mutually exclusive options. Please specify only one")
-	}
-	if !conf.BridgeConfig.EnableIPTables && !conf.BridgeConfig.InterContainerCommunication {
-		return fmt.Errorf("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true")
-	}
-	if conf.BridgeConfig.EnableIP6Tables && !conf.Experimental {
-		return fmt.Errorf("ip6tables rules are only available if experimental features are enabled")
-	}
-	if !conf.BridgeConfig.EnableIPTables && conf.BridgeConfig.EnableIPMasq {
-		conf.BridgeConfig.EnableIPMasq = false
+
+	if err := verifyNetworkSettings(conf); err != nil {
+		return err
 	}
 	if err := VerifyCgroupDriver(conf); err != nil {
 		return err
@@ -841,6 +832,30 @@ func configureKernelSecuritySupport(config *config.Config, driverName string) er
 		}
 	} else {
 		selinuxSetDisabled()
+	}
+	return nil
+}
+
+// verifyNetworkSettings validates all daemon configurations related to the networking subsystem
+func verifyNetworkSettings(conf *config.Config) error {
+	// Check for mutually incompatible config options
+	if conf.BridgeConfig.Iface != "" && conf.BridgeConfig.IP != "" {
+		return errdefs.InvalidParameter(errors.New("You specified -b & --bip, mutually exclusive options. Please specify only one"))
+	}
+	if !conf.BridgeConfig.EnableIPTables && !conf.BridgeConfig.InterContainerCommunication {
+		return errdefs.InvalidParameter(errors.New("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true"))
+	}
+	if conf.BridgeConfig.EnableIPv6 && conf.BridgeConfig.FixedCIDRv6 == "" {
+		return errdefs.InvalidParameter(errors.New("IPv6 is enabled for the default bridge, but no subnet is configured. Specify an IPv6 subnet using --fixed-cidr-v6"))
+	}
+	if conf.BridgeConfig.EnableIP6Tables && ((!conf.BridgeConfig.EnableIPv6) || (conf.BridgeConfig.FixedCIDRv6 == "")) {
+		return errdefs.InvalidParameter(errors.New("You specified --ip6tables with --ipv6=false and --fixed-cidr-v6=''. Please set --ipv6 and specify an IPv6 subnet using --fixed-cidr-v6"))
+	}
+	if conf.BridgeConfig.EnableIP6Tables && !conf.Experimental {
+		return errdefs.InvalidParameter(errors.New("ip6tables rules are only available if experimental features are enabled"))
+	}
+	if !conf.BridgeConfig.EnableIPTables && conf.BridgeConfig.EnableIPMasq {
+		conf.BridgeConfig.EnableIPMasq = false
 	}
 	return nil
 }
@@ -999,9 +1014,7 @@ func initBridgeDriver(controller libnetwork.NetworkController, config *config.Co
 		ipamV6Conf     *libnetwork.IpamConf
 	)
 
-	if config.BridgeConfig.EnableIPv6 && config.BridgeConfig.FixedCIDRv6 == "" {
-		return errdefs.InvalidParameter(errors.New("IPv6 is enabled for the default bridge, but no subnet is configured. Specify an IPv6 subnet using --fixed-cidr-v6"))
-	} else if config.BridgeConfig.FixedCIDRv6 != "" {
+	if config.BridgeConfig.FixedCIDRv6 != "" {
 		_, fCIDRv6, err := net.ParseCIDR(config.BridgeConfig.FixedCIDRv6)
 		if err != nil {
 			return err
